@@ -1,6 +1,7 @@
-use std::error::Error;
+use std::array;
 
-use super::image::{Framebuffer, Image};
+use super::framebuffer::Framebuffer;
+use super::shader::{Shader, VertexContext, VertexOutput};
 
 pub struct DepthTesting {
     pub test: bool,
@@ -12,55 +13,63 @@ pub enum WindingOrder {
     CounterClockwise,
 }
 
-pub enum Topology {
-    TriangleList,
-    TriangleStrip,
-}
-
-pub struct Pipeline {
+pub struct Pipeline<S: Shader> {
     pub depth: DepthTesting,
 
     pub cull_back: bool,
     pub winding_order: WindingOrder,
-    pub topology: Topology,
+
+    pub shader: S,
 }
 
 pub struct Rasterizer {
     // todo: multithreading worker
 }
 
-pub struct ClearValue {
-    pub color: u32,
-    pub depth: f32,
+pub struct IndexedRenderCall<'a, T, S: Shader<Uniform = T>> {
+    pub pipeline: &'a Pipeline<S>,
+    pub framebuffer: &'a mut Framebuffer,
+
+    pub vertex_offset: usize,
+    pub first_instance: usize,
+    pub instance_count: usize,
+
+    pub indices: &'a [u16],
+    pub data: &'a T,
 }
 
-impl Rasterizer {
-    fn clear_attachment<T: Sized + Copy>(&self, attachment: &mut Image<T>, value: T) {
-        let (width, height) = attachment.size();
+pub const VERTICES_PER_FACE: usize = 3;
 
-        for y in 0..height {
-            for x in 0..width {
-                attachment.exchange(x, y, value);
-            }
-        }
+impl Rasterizer {
+    fn render_face<T, S: Shader<Uniform = T>>(
+        &self,
+        instance_id: usize,
+        face_index: usize,
+        call: &IndexedRenderCall<T, S>,
+    ) {
+        let index_offset = face_index * VERTICES_PER_FACE;
+        let _vertex_output: [VertexOutput<S::Working>; VERTICES_PER_FACE] = array::from_fn(|i| {
+            let index = call.indices[index_offset + i];
+
+            call.pipeline.shader.vertex_stage(&VertexContext {
+                vertex_id: index as usize,
+                instance_id: instance_id,
+                data: call.data,
+            })
+        });
+
+        // uh
     }
 
-    pub fn clear_framebuffer(
-        &self,
-        fb: &mut Framebuffer,
-        value: &ClearValue,
-    ) -> Result<(), Box<dyn Error>> {
-        fb.validate()?;
+    pub fn render_indexed<T, S: Shader<Uniform = T>>(&self, call: &IndexedRenderCall<T, S>) {
+        let face_count = call.indices.len() / VERTICES_PER_FACE;
 
-        for attachment in &mut fb.color {
-            self.clear_attachment(attachment, value.color);
+        // todo: do we care about unused indices?
+
+        for i in 0..call.instance_count {
+            for j in 0..face_count {
+                self.render_face(call.first_instance + i, j, call);
+            }
         }
-
-        match &mut fb.depth {
-            Some(depth) => self.clear_attachment(depth, value.depth),
-            None => (),
-        };
-
-        Ok(())
     }
 }

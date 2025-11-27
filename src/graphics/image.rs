@@ -1,18 +1,10 @@
-use std::iter;
+use std::iter::{self, Iterator};
 use std::mem;
 
 pub struct Image<T: Sized> {
     data: Vec<T>,
     width: usize,
     height: usize,
-}
-
-pub struct Framebuffer {
-    pub width: usize,
-    pub height: usize,
-
-    pub color: Vec<Image<u32>>,
-    pub depth: Option<Image<f32>>,
 }
 
 impl<T: Sized + Default> Image<T> {
@@ -27,7 +19,13 @@ impl<T: Sized + Default> Image<T> {
     }
 }
 
-impl<T : Sized> Image<T> {
+pub struct CoordinateIterator {
+    pixel_index: usize,
+    width: usize,
+    height: usize,
+}
+
+impl<T: Sized> Image<T> {
     fn index_of(&self, x: usize, y: usize) -> Option<usize> {
         if x >= self.width || y >= self.height {
             None
@@ -52,30 +50,29 @@ impl<T : Sized> Image<T> {
     pub fn size(&self) -> (usize, usize) {
         (self.width, self.height)
     }
-}
 
-impl Framebuffer {
-    fn validate_attachment<T: Sized>(&self, attachment: &Image<T>) -> Result<(), String> {
-        if self.width != attachment.width || self.height != attachment.height {
-            Err(format!(
-                "Size mismatch on framebuffer attachment! ({0}x{1} vs {2}x{3})",
-                self.width, self.height, attachment.width, attachment.height
-            ))
-        } else {
-            Ok(())
+    pub fn coordinates(&self) -> CoordinateIterator {
+        CoordinateIterator {
+            pixel_index: 0,
+            width: self.width,
+            height: self.height,
         }
     }
+}
 
-    pub fn validate(&self) -> Result<(), String> {
-        for color in &self.color {
-            self.validate_attachment(color)?;
+impl Iterator for CoordinateIterator {
+    type Item = (usize, usize);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let total_pixels = self.width * self.height;
+        if self.pixel_index >= total_pixels {
+            return None;
         }
 
-        match &self.depth {
-            Some(depth) => self.validate_attachment(depth),
-            None => Ok(())
-        }?;
+        let x = self.pixel_index % self.width;
+        let y = self.pixel_index / self.width;
+        self.pixel_index += 1;
 
-        Ok(())
+        return Some((x, y));
     }
 }

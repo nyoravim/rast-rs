@@ -29,29 +29,16 @@ fn dump_image(data: &Image<u32>) {
 }
 
 fn main() {
-    let rast = Rasterizer {
+    let _ = Rasterizer {
         // uh
     };
 
-    let width = 1600;
-    let height = 900;
+    let mut fb = Framebuffer::new(1600, 900, 1, false);
 
-    let mut fb = Framebuffer {
-        color: vec![Image::new(width, height)],
-        depth: None,
+    fb.clear(&ClearValue {
+        color: 0x00FF00FF,
+        depth: 1.0,
+    });
 
-        width: width,
-        height: height,
-    };
-
-    rast.clear_framebuffer(
-        &mut fb,
-        &ClearValue {
-            color: 0x00FF00FF,
-            depth: 1.0,
-        },
-    )
-    .expect("Failed to clear framebuffer!");
-
-    dump_image(&fb.color[0]);
+    dump_image(&fb.color_attachments()[0]);
 }
