@@ -1,11 +1,14 @@
 use std::array;
+use std::sync::Mutex;
 
-use nalgebra::{Matrix2, Point2, Point3, Vector2};
+use nalgebra::{Matrix2, Point2, Point3};
 use rayon::prelude::*;
 
 use super::framebuffer::Framebuffer;
 use super::scissor::Scissor;
-use super::shader::{Shader, VertexContext, VertexOutput};
+use super::shader::{
+    FragmentContext, ProcessedVertexOutput, Shader, ShaderWorkingData, VertexContext, VertexOutput,
+};
 
 #[derive(Debug)]
 pub struct DepthTesting {
@@ -35,7 +38,7 @@ pub struct Rasterizer {
 
 pub struct IndexedRenderCall<'a, T: Shader> {
     pub pipeline: &'a Pipeline<T>,
-    pub framebuffer: &'a mut Framebuffer,
+    pub framebuffer: Mutex<&'a mut Framebuffer>,
 
     pub vertex_offset: usize,
     pub first_instance: usize,
@@ -47,16 +50,16 @@ pub struct IndexedRenderCall<'a, T: Shader> {
     pub data: &'a T::Uniform,
 }
 
-pub fn gen_scissor(uv: &[(f32, f32)], max_width: usize, max_height: usize) -> Scissor {
+pub fn gen_scissor(uv: &[Point2<f32>], max_width: usize, max_height: usize) -> Scissor {
     let mut x0 = max_width;
     let mut y0 = max_height;
 
     let mut x1: usize = 0;
     let mut y1: usize = 0;
 
-    for (u, v) in uv {
-        let x = u.clamp(0.0, 1.0) * max_width as f32;
-        let y = v.clamp(0.0, 1.0) * max_height as f32;
+    for point in uv {
+        let x = point.x.clamp(0.0, 1.0) * max_width as f32;
+        let y = point.y.clamp(0.0, 1.0) * max_height as f32;
 
         x0 = (x.floor() as usize).min(x0);
         y0 = (y.floor() as usize).min(y0);
@@ -71,11 +74,6 @@ pub fn gen_scissor(uv: &[(f32, f32)], max_width: usize, max_height: usize) -> Sc
         width: x1 - x0,
         height: y1 - y0,
     }
-}
-
-fn vertex_output_to_uv(x: f32) -> f32 {
-    // map [-1, 1] to [0, 1]
-    (x + 1.0) / 2.0
 }
 
 fn signed_triangle_area(points: [&Point2<f32>; 3], winding: WindingOrder) -> f32 {
@@ -112,7 +110,7 @@ fn process_fragment_geometry(
     cull_back: bool,
 ) -> Option<FragmentInfo> {
     let screen_points = triangle.each_ref().map(|p| p.xy());
-    let areas: [f32; VERTICES_PER_FACE] = array::from_fn(|i| {
+    let areas = array::from_fn::<_, VERTICES_PER_FACE, _>(|i| {
         let a = &screen_points[(i + 1) % VERTICES_PER_FACE];
         let b = &screen_points[(i + 2) % VERTICES_PER_FACE];
 
@@ -129,14 +127,14 @@ fn process_fragment_geometry(
     }
 
     if should_keep {
-        let depth_sum: f32 = areas.iter().sum();
-        let flat_weights = areas.map(|area| area / depth_sum);
+        let area_sum = areas.iter().sum::<f32>();
+        let flat_weights = areas.map(|area| area / area_sum);
 
-        let point_depths = triangle.each_ref().map(|p| p.z);
-        let depth_sum: f32 = point_depths.iter().sum();
-
-        // todo: replace
-        None
+        let inverse_depths = triangle.each_ref().map(|p| 1.0 / p.z);
+        Some(FragmentInfo {
+            depth: 1.0 / inverse_depths.iter().sum::<f32>(),
+            weights: array::from_fn(|i| flat_weights[i] * inverse_depths[i]),
+        })
     } else {
         None
     }
@@ -150,11 +148,12 @@ impl Rasterizer {
         instance_id: usize,
         call: &IndexedRenderCall<T>,
         vertex_output: &[VertexOutput<T::Working>; VERTICES_PER_FACE],
+        fb_width: usize,
+        fb_height: usize,
     ) {
-        let (fb_width, fb_height) = call.framebuffer.size();
         let point = Point2::new(
-            (x as f32 + 0.5) / fb_width as f32 * 2.0 - 1.0,
-            (y as f32 + 0.5) / fb_height as f32 * 2.0 - 1.0,
+            (((x as f32 + 0.5) / fb_width as f32) * 2.0) - 1.0,
+            (((y as f32 + 0.5) / fb_height as f32) * 2.0) - 1.0,
         );
 
         let vertex_positions = vertex_output.each_ref().map(|data| data.position);
@@ -164,6 +163,28 @@ impl Rasterizer {
             call.pipeline.winding_order,
             call.pipeline.cull_back,
         );
+
+        if let Some(frag) = frag_info {
+            let color = call.pipeline.shader.fragment_stage(&FragmentContext {
+                instance_id,
+                position: Point3::new(point.x, point.y, frag.depth),
+                data: &call.data,
+                working: T::Working::blend(
+                    &Vec::from_iter((0..VERTICES_PER_FACE).map(|i| ProcessedVertexOutput {
+                        data: &vertex_output[i].data,
+                        weight: frag.weights[i],
+                    })),
+                    frag.depth,
+                ),
+            });
+
+            let mut fb = call.framebuffer.lock().unwrap();
+            let num_attachments = fb.color_attachments().len();
+
+            for i in 0..num_attachments {
+                fb.set_color(i, x, y, color);
+            }
+        }
     }
 
     fn render_face<T: Shader + Sync>(
@@ -183,14 +204,11 @@ impl Rasterizer {
             })
         });
 
-        let uv = vertex_output.each_ref().map(|output| {
-            (
-                vertex_output_to_uv(output.position[0]),
-                vertex_output_to_uv(output.position[1]),
-            )
-        });
+        let uv = vertex_output
+            .each_ref()
+            .map(|output| output.position.xy().map(|x| (x + 1.0) / 2.0));
 
-        let (fb_width, fb_height) = call.framebuffer.size();
+        let (fb_width, fb_height) = call.framebuffer.lock().unwrap().size();
         let generated_scissor = gen_scissor(&uv, fb_width, fb_height);
 
         let final_scissor = match &call.scissor {
@@ -199,10 +217,9 @@ impl Rasterizer {
         };
 
         if let Some(scissor) = final_scissor {
-            scissor
-                .coordinates()
-                .par_bridge()
-                .for_each(|(x, y)| self.render_pixel(x, y, instance_id, call, &vertex_output));
+            scissor.coordinates().par_bridge().for_each(|(x, y)| {
+                self.render_pixel(x, y, instance_id, call, &vertex_output, fb_width, fb_height);
+            });
         }
     }
 

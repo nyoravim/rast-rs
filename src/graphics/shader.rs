@@ -19,8 +19,13 @@ pub struct VertexOutput<W> {
     pub data: W,
 }
 
+pub struct ProcessedVertexOutput<'a, W: ?Sized> {
+    pub data: &'a W,
+    pub weight: f32,
+}
+
 pub trait ShaderWorkingData {
-    fn blend<'a>(data: &[(&'a Self, f32)]) -> Self;
+    fn blend(data: &[ProcessedVertexOutput<Self>], scale: f32) -> Self;
 }
 
 pub trait Shader {

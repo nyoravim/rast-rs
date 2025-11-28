@@ -57,4 +57,8 @@ impl Framebuffer {
             fill_image(depth, value.depth);
         }
     }
+
+    pub fn set_color(&mut self, index: usize, x: usize, y: usize, color: u32) {
+        self.color[index].exchange(x, y, color);
+    }
 }
