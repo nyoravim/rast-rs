@@ -19,12 +19,6 @@ impl<T: Sized + Default> Image<T> {
     }
 }
 
-pub struct CoordinateIterator {
-    pixel_index: usize,
-    width: usize,
-    height: usize,
-}
-
 impl<T: Sized> Image<T> {
     fn index_of(&self, x: usize, y: usize) -> Option<usize> {
         if x >= self.width || y >= self.height {
@@ -56,6 +50,22 @@ impl<T: Sized> Image<T> {
             pixel_index: 0,
             width: self.width,
             height: self.height,
+        }
+    }
+}
+
+pub struct CoordinateIterator {
+    pixel_index: usize,
+    width: usize,
+    height: usize,
+}
+
+impl CoordinateIterator {
+    pub(crate) fn new(width: usize, height: usize) -> CoordinateIterator {
+        CoordinateIterator {
+            pixel_index: 0,
+            width,
+            height,
         }
     }
 }

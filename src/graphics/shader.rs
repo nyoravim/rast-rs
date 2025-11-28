@@ -1,17 +1,22 @@
-pub struct VertexContext<'a, T> {
+use nalgebra::Point3;
+
+pub struct VertexContext<'a, U> {
     pub vertex_id: usize,
     pub instance_id: usize,
-    pub data: &'a T,
+    pub data: &'a U,
 }
 
-pub struct FragmentContext<'a, T> {
+pub struct FragmentContext<'a, U, W> {
     pub instance_id: usize,
-    pub data: &'a T,
+    pub position: Point3<f32>,
+
+    pub data: &'a U,
+    pub working: W,
 }
 
-pub struct VertexOutput<T> {
-    pub position: [f32; 4],
-    pub data: T,
+pub struct VertexOutput<W> {
+    pub position: Point3<f32>,
+    pub data: W,
 }
 
 pub trait ShaderWorkingData {
@@ -19,14 +24,9 @@ pub trait ShaderWorkingData {
 }
 
 pub trait Shader {
-    type Uniform;
-    type Working: ShaderWorkingData;
+    type Uniform: Sync;
+    type Working: ShaderWorkingData + Sync;
 
     fn vertex_stage(&self, context: &VertexContext<Self::Uniform>) -> VertexOutput<Self::Working>;
-
-    fn fragment_stage(
-        &self,
-        context: &FragmentContext<Self::Uniform>,
-        inputs: &[VertexOutput<Self::Working>; 3],
-    ) -> u32;
+    fn fragment_stage(&self, context: &FragmentContext<Self::Uniform, Self::Working>) -> u32;
 }

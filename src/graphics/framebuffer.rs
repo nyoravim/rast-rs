@@ -16,6 +16,7 @@ pub struct Framebuffer {
     depth: Option<Image<f32>>,
 }
 
+#[derive(Debug)]
 pub struct ClearValue {
     pub color: u32,
     pub depth: f32,
