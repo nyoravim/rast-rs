@@ -237,7 +237,7 @@ impl Rasterizer {
                 .par_iter_mut()
                 .for_each(|scanline| {
                     for delta_x in 0..scissor.width {
-                        self.render_pixel(delta_x, &fc, scanline);
+                        self.render_pixel(scissor.x + delta_x, &fc, scanline);
                     }
                 });
         }

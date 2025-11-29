@@ -65,8 +65,6 @@ impl Framebuffer {
     }
 
     pub fn scanlines<'a>(&'a mut self, offset: usize, count: usize) -> Vec<MutableScanline<'a>> {
-        let mut scanlines = Vec::new();
-
         if offset >= self.height || offset + count > self.height {
             panic!("Invalid scanline range!");
         }
@@ -74,39 +72,52 @@ impl Framebuffer {
         let start = offset * self.width;
         let end = (offset + count) * self.width;
 
-        let mut cursors: Vec<_> = self
+        // vector of advancing cursors through the color attachments through the range selected by
+        // the user
+        let mut color_cursors: Vec<_> = self
             .color
             .iter_mut()
             .map(|attachment| &mut attachment.data_mut()[start..end])
             .collect();
 
+        // advancing cursor through depth attachment if one exists
         let mut depth_cursor = self
             .depth
             .as_mut()
             .map(|attachment| &mut attachment.data_mut()[start..end]);
 
+        let mut scanlines = Vec::new();
         for delta_y in 0..count {
             let mut color = Vec::new();
-            let mut new_cursors = Vec::new();
+            let mut advanced_cursors = Vec::new();
 
-            for cursor in cursors {
+            // advance color attachment cursors by a row and append a shorter slice at the previous
+            // location
+            for cursor in color_cursors {
                 let (first, second) = cursor.split_at_mut(self.width);
 
                 color.push(first);
-                new_cursors.push(second);
+                advanced_cursors.push(second);
             }
 
-            cursors = new_cursors;
+            color_cursors = advanced_cursors;
             scanlines.push(MutableScanline {
                 y: offset + delta_y,
                 color,
+
+                // i would rather use Option::map but it moves the value regardless of if its
+                // Some(_) or None so we have to match
                 depth: match depth_cursor {
+                    // if we have a depth attachment, advance it by a row and return a shorter
+                    // slice at the previous location
                     Some(cursor) => {
                         let (first, second) = cursor.split_at_mut(self.width);
                         depth_cursor = Some(second);
 
                         Some(first)
                     }
+
+                    // otherwise we dont care
                     None => None,
                 },
             });
