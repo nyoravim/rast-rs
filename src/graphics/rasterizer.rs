@@ -9,10 +9,27 @@ use super::shader::{
     FragmentContext, ProcessedVertexOutput, Shader, ShaderWorkingData, VertexContext, VertexOutput,
 };
 
-#[derive(Debug)]
-pub struct DepthTesting {
-    pub test: bool,
-    pub write: bool,
+#[derive(Debug, Clone, Copy)]
+pub enum DepthMode {
+    DontCare,
+    Test,
+    Write,
+}
+
+impl DepthMode {
+    fn should_test(&self) -> bool {
+        match self {
+            DepthMode::DontCare => false,
+            _ => true,
+        }
+    }
+
+    fn should_write(&self) -> bool {
+        match self {
+            DepthMode::Write => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -23,7 +40,7 @@ pub enum WindingOrder {
 
 #[derive(Debug)]
 pub struct Pipeline<T: Shader> {
-    pub depth: DepthTesting,
+    pub depth: DepthMode,
 
     pub cull_back: bool,
     pub winding_order: WindingOrder,
@@ -114,7 +131,7 @@ fn process_fragment_geometry<T: Shader>(
     pipeline: &Pipeline<T>,
 ) -> Option<FragmentInfo> {
     let screen_points = triangle.each_ref().map(|p| p.xy());
-    let areas = array::from_fn::<_, VERTICES_PER_FACE, _>(|i| {
+    let areas: [_; VERTICES_PER_FACE] = array::from_fn(|i| {
         let a = &screen_points[(i + 1) % VERTICES_PER_FACE];
         let b = &screen_points[(i + 2) % VERTICES_PER_FACE];
 
@@ -144,6 +161,17 @@ fn process_fragment_geometry<T: Shader>(
     }
 }
 
+// returns false on failure
+fn depth_test(x: usize, current_depth: f32, scanline: &MutableScanline) -> bool {
+    if let Some(depth) = &scanline.depth {
+        let closest_depth = depth[x];
+
+        current_depth <= closest_depth
+    } else {
+        true
+    }
+}
+
 struct FaceContext<'a, T: Shader> {
     instance_id: usize,
     call: &'a IndexedRenderCall<'a, T>,
@@ -170,6 +198,10 @@ impl Rasterizer {
             process_fragment_geometry(&vertex_positions, &point, &context.call.pipeline);
 
         if let Some(frag) = frag_info {
+            if context.call.pipeline.depth.should_test() && !depth_test(x, frag.depth, scanline) {
+                return;
+            }
+
             let color = context
                 .call
                 .pipeline
@@ -190,6 +222,12 @@ impl Rasterizer {
             for row in &mut scanline.color {
                 row[x] = color;
             }
+
+            if context.call.pipeline.depth.should_write()
+                && let Some(depth_row) = &mut scanline.depth
+            {
+                depth_row[x] = frag.depth;
+            }
         }
     }
 
@@ -204,10 +242,8 @@ impl Rasterizer {
         let (fb_width, fb_height) = framebuffer.size();
 
         let vertex_output = array::from_fn(|i| {
-            let index = call.indices[index_offset + i];
-
             call.pipeline.shader.vertex_stage(&VertexContext {
-                vertex_id: index as usize,
+                vertex_id: call.indices[index_offset + i] as usize,
                 instance_id: instance_id,
                 data: call.data,
             })

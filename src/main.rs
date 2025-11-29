@@ -85,7 +85,7 @@ fn main() {
         // uh
     };
 
-    let mut fb = Framebuffer::new(1600, 900, 1, false);
+    let mut fb = Framebuffer::new(1600, 900, 1, true);
 
     fb.clear(&ClearValue {
         color: 0x787878FF,
@@ -97,10 +97,7 @@ fn main() {
     rast.render_indexed(
         &IndexedRenderCall {
             pipeline: &Pipeline {
-                depth: DepthTesting {
-                    test: true,
-                    write: true,
-                },
+                depth: DepthMode::Write,
                 cull_back: true,
                 winding_order: WindingOrder::CounterClockwise,
                 shader: TestShader {},
