@@ -1,8 +1,6 @@
-pub mod graphics;
-
 use nalgebra::{Matrix4, Point3, Vector3};
 
-use graphics::*;
+use rast::graphics::*;
 
 struct Vertex {
     position: Point3<f32>,
