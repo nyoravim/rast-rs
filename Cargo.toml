@@ -1,5 +1,5 @@
 [package]
-name = "rast"
+name = "rast-graphics"
 version = "0.1.0"
 edition = "2024"
 authors = ["nyoravim"]
@@ -7,6 +7,9 @@ description = "Parallelized software rasterizer"
 readme = "README.md"
 repository = "https://github.com/nyoravim/rast-rs"
 license-file = "LICENSE"
+
+[lib]
+name = "rast"
 
 [dependencies]
 nalgebra = { version = "0.34.1", features = ["rayon"] }
