@@ -1,3 +1,6 @@
+use std::error::Error;
+use std::sync::{Arc, Mutex};
+
 use nalgebra::{Matrix4, Point3, Vector3};
 
 use rast::graphics::*;
@@ -75,60 +78,67 @@ fn dump_image(data: &Image<u32>) {
     image.save("dump.bmp").unwrap();
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn Error>> {
     let mut rast = Rasterizer::new();
+    let arc = Arc::new(Mutex::new(Framebuffer::new(1600, 900, 1, true)));
 
-    let mut fb = Framebuffer::new(1600, 900, 1, true);
-    fb.clear(&ClearValue {
-        color: 0x787878FF,
-        depth: 1.0,
-    });
+    {
+        let mut fb = arc.lock().unwrap();
+        fb.clear(&ClearValue {
+            color: 0x787878FF,
+            depth: 1.0,
+        });
+    }
 
     println!("Cleared");
 
-    rast.render_indexed(
-        &IndexedRenderCall {
-            pipeline: &Pipeline {
-                depth: DepthMode::Write,
-                cull_back: true,
-                winding_order: WindingOrder::CounterClockwise,
-                blending: None,
-                shader: TestShader {},
-            },
-            vertex_offset: 0,
-            first_instance: 0,
-            instance_count: 1,
-            scissor: None,
-            indices: &[0, 2, 1],
-            data: &TestUniformData {
-                model: Matrix4::new_translation(&Vector3::new(0.0, 0.0, 0.5)),
-                vertices: Box::new([
-                    Vertex {
-                        position: Point3::new(0.0, -0.5, 0.0),
-                        color: 0xFF0000FF,
-                    },
-                    Vertex {
-                        position: Point3::new(0.5, 0.5, 0.0),
-                        color: 0x00FF00FF,
-                    },
-                    Vertex {
-                        position: Point3::new(-0.5, 0.5, 0.0),
-                        color: 0x0000FFFF,
-                    },
-                ]),
-            },
+    rast.push_render_target(arc.clone());
+    rast.render_indexed(&IndexedRenderCall {
+        pipeline: &Pipeline {
+            depth: DepthMode::Write,
+            cull_back: true,
+            winding_order: WindingOrder::CounterClockwise,
+            blending: None,
+            shader: TestShader {},
         },
-        &mut fb,
-    );
+        vertex_offset: 0,
+        first_instance: 0,
+        instance_count: 1,
+        scissor: None,
+        indices: &[0, 2, 1],
+        data: &TestUniformData {
+            model: Matrix4::new_translation(&Vector3::new(0.0, 0.0, 0.5)),
+            vertices: Box::new([
+                Vertex {
+                    position: Point3::new(0.0, -0.5, 0.0),
+                    color: 0xFF0000FF,
+                },
+                Vertex {
+                    position: Point3::new(0.5, 0.5, 0.0),
+                    color: 0x00FF00FF,
+                },
+                Vertex {
+                    position: Point3::new(-0.5, 0.5, 0.0),
+                    color: 0x0000FFFF,
+                },
+            ]),
+        },
+    })?;
 
+    rast.pop_render_target()?;
     println!("Rendered");
-    
+
     let stats = rast.stats();
     println!("{} calls", stats.calls);
     println!("{} instances", stats.instances);
     println!("{} faces processed", stats.faces_processed);
     println!("{} faces rendered", stats.faces_rendered);
 
-    dump_image(&fb.color_attachments()[0]);
+    {
+        let fb = arc.lock().unwrap();
+        dump_image(&fb.color_attachments()[0]);
+    }
+
     println!("Dumped image");
+    Ok(())
 }

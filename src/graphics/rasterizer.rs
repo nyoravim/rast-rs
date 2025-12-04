@@ -1,4 +1,8 @@
 use std::array;
+use std::collections::LinkedList;
+use std::error::Error;
+use std::fmt::{self, Display, Formatter};
+use std::sync::{Arc, Mutex};
 
 use nalgebra::{Point2, Point3, Vector2};
 use rayon::prelude::*;
@@ -7,6 +11,27 @@ use super::blending::Blendable;
 use super::framebuffer::{Framebuffer, MutableScanline};
 use super::scissor::Scissor;
 use super::shader::{FragmentContext, Shader, VertexContext, VertexOutput};
+
+#[derive(Debug)]
+pub enum RasterizerError {
+    NoRenderTarget,
+    RenderTargetUnfinished,
+}
+
+impl Display for RasterizerError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::NoRenderTarget => "No render target pushed to the stack!",
+                Self::RenderTargetUnfinished => "Render target still present on the stack!",
+            }
+        )
+    }
+}
+
+impl Error for RasterizerError {}
 
 #[derive(Debug, Clone, Copy)]
 pub enum BlendFactor {
@@ -354,21 +379,46 @@ pub struct RenderStats {
 
 pub struct Rasterizer {
     stats: RenderStats,
+    render_targets: LinkedList<Arc<Mutex<Framebuffer>>>,
 }
 
 impl Rasterizer {
     pub fn new() -> Rasterizer {
         Rasterizer {
             stats: RenderStats::default(),
+            render_targets: LinkedList::new(),
         }
     }
 
-    pub fn reset(&mut self) {
-        self.stats = RenderStats::default();
+    pub fn new_frame(&mut self) -> Result<(), RasterizerError> {
+        if !self.render_targets.is_empty() {
+            Err(RasterizerError::RenderTargetUnfinished)
+        } else {
+            self.stats = RenderStats::default();
+            Ok(())
+        }
     }
 
     pub fn stats<'a>(&'a self) -> &'a RenderStats {
         &self.stats
+    }
+
+    pub fn push_render_target(&mut self, target: Arc<Mutex<Framebuffer>>) {
+        self.render_targets.push_back(target);
+    }
+
+    pub fn pop_render_target(&mut self) -> Result<(), RasterizerError> {
+        match self.render_targets.pop_back() {
+            Some(_) => Ok(()),
+            None => Err(RasterizerError::NoRenderTarget),
+        }
+    }
+
+    pub fn current_render_target(&mut self) -> Result<Arc<Mutex<Framebuffer>>, RasterizerError> {
+        match self.render_targets.back() {
+            Some(top) => Ok(top.clone()),
+            None => Err(RasterizerError::NoRenderTarget),
+        }
     }
 
     fn render_face<T: Shader + Sync>(
@@ -424,15 +474,17 @@ impl Rasterizer {
     pub fn render_indexed<T: Shader + Sync>(
         &mut self,
         call: &IndexedRenderCall<T>,
-        framebuffer: &mut Framebuffer,
-    ) {
+    ) -> Result<(), RasterizerError> {
         let face_count = call.indices.len() / VERTICES_PER_FACE;
 
         // todo: do we care about unused indices?
 
+        let top = self.current_render_target()?;
+        let mut framebuffer = top.lock().unwrap();
+
         for i in 0..call.instance_count {
             for j in 0..face_count {
-                self.render_face(call.first_instance + i, j, call, framebuffer);
+                self.render_face(call.first_instance + i, j, call, &mut framebuffer);
                 self.stats.faces_processed += 1;
             }
 
@@ -440,5 +492,6 @@ impl Rasterizer {
         }
 
         self.stats.calls += 1;
+        Ok(())
     }
 }

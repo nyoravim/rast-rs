@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::num::NonZeroU32;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use std::{array, iter};
 
@@ -22,7 +23,7 @@ struct GraphicsContext {
     surface: softbuffer::Surface<OwnedDisplayHandle, Rc<Window>>,
 
     rast: Rasterizer,
-    framebuffer: Framebuffer,
+    framebuffer: Arc<Mutex<Framebuffer>>,
 }
 
 struct Vertex {
@@ -90,8 +91,13 @@ impl GraphicsContext {
             surface,
 
             rast: Rasterizer::new(),
-            framebuffer: Self::create_framebuffer(&window),
+            framebuffer: Arc::new(Mutex::new(Self::create_framebuffer(&window))),
         })
+    }
+
+    fn current_fb_size(&self) -> (usize, usize) {
+        let fb = self.framebuffer.lock().unwrap();
+        fb.size()
     }
 
     fn update_context(&mut self) -> Result<(), Box<dyn Error>> {
@@ -101,9 +107,10 @@ impl GraphicsContext {
             NonZeroU32::new(size.height).unwrap(),
         )?;
 
-        let (fb_width, fb_height) = self.framebuffer.size();
+        let (fb_width, fb_height) = self.current_fb_size();
         if size.width as usize != fb_width || size.height as usize != fb_height {
-            self.framebuffer = Self::create_framebuffer(&self.window);
+            let new_fb = Self::create_framebuffer(&self.window);
+            self.framebuffer = Arc::new(Mutex::new(new_fb));
         }
 
         Ok(())
@@ -112,7 +119,8 @@ impl GraphicsContext {
     fn present(&mut self) -> Result<(), Box<dyn Error>> {
         let mut buffer = self.surface.buffer_mut()?;
 
-        let attachments = self.framebuffer.color_attachments();
+        let fb = self.framebuffer.lock().unwrap();
+        let attachments = fb.color_attachments();
         let output_attachment = &attachments[0];
 
         let (width, height) = output_attachment.size();
@@ -152,7 +160,9 @@ impl App {
     }
 
     fn update(graphics: &GraphicsContext, data: &mut AppData) {
-        let (width, height) = graphics.framebuffer.size();
+        let fb = graphics.framebuffer.lock().unwrap();
+        let (width, height) = fb.size();
+
         let aspect = (width as f32) / (height as f32);
 
         let t1 = Instant::now();
@@ -192,26 +202,31 @@ impl App {
         }
     }
 
-    fn render(graphics: &mut GraphicsContext, data: &AppData) -> Result<(), Box<dyn Error>> {
-        graphics.rast.reset();
-        graphics.framebuffer.clear(&ClearValue {
+    fn clear_framebuffer(graphics: &mut GraphicsContext) {
+        let mut fb = graphics.framebuffer.lock().unwrap();
+        fb.clear(&ClearValue {
             color: 0x787878FF,
             depth: 1.0,
         });
+    }
 
-        graphics.rast.render_indexed(
-            &IndexedRenderCall {
-                pipeline: &data.pipeline,
-                vertex_offset: 0,
-                first_instance: 0,
-                instance_count: data.uniforms.instances.len(),
-                scissor: None,
-                indices: &data.indices,
-                data: &data.uniforms,
-            },
-            &mut graphics.framebuffer,
-        );
+    fn render(graphics: &mut GraphicsContext, data: &AppData) -> Result<(), Box<dyn Error>> {
+        Self::clear_framebuffer(graphics);
 
+        graphics.rast.new_frame()?;
+        graphics.rast.push_render_target(graphics.framebuffer.clone());
+
+        graphics.rast.render_indexed(&IndexedRenderCall {
+            pipeline: &data.pipeline,
+            vertex_offset: 0,
+            first_instance: 0,
+            instance_count: data.uniforms.instances.len(),
+            scissor: None,
+            indices: &data.indices,
+            data: &data.uniforms,
+        })?;
+
+        graphics.rast.pop_render_target()?;
         Ok(())
     }
 
